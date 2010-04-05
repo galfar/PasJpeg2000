@@ -1,0 +1,48 @@
+﻿	<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+		<PropertyGroup>
+			<ProjectGuid>{7E5AC30A-C06B-4788-93C5-EC73FD96273C}</ProjectGuid>
+		</PropertyGroup>
+		<ItemGroup>
+			<Projects Include="VCLTestApp.dproj">
+				<Dependencies/>
+			</Projects>
+			<Projects Include="ConsolePasOpenJpeg.dproj">
+				<Dependencies/>
+			</Projects>
+		</ItemGroup>
+		<ProjectExtensions>
+			<Borland.Personality>Default.Personality.12</Borland.Personality>
+			<Borland.ProjectType/>
+			<BorlandProject>
+				<Default.Personality/>
+			</BorlandProject>
+		</ProjectExtensions>
+		<Target Name="VCLTestApp">
+			<MSBuild Projects="VCLTestApp.dproj"/>
+		</Target>
+		<Target Name="VCLTestApp:Clean">
+			<MSBuild Targets="Clean" Projects="VCLTestApp.dproj"/>
+		</Target>
+		<Target Name="VCLTestApp:Make">
+			<MSBuild Targets="Make" Projects="VCLTestApp.dproj"/>
+		</Target>
+		<Target Name="ConsolePasOpenJpeg">
+			<MSBuild Projects="ConsolePasOpenJpeg.dproj"/>
+		</Target>
+		<Target Name="ConsolePasOpenJpeg:Clean">
+			<MSBuild Targets="Clean" Projects="ConsolePasOpenJpeg.dproj"/>
+		</Target>
+		<Target Name="ConsolePasOpenJpeg:Make">
+			<MSBuild Targets="Make" Projects="ConsolePasOpenJpeg.dproj"/>
+		</Target>
+		<Target Name="Build">
+			<CallTarget Targets="VCLTestApp;ConsolePasOpenJpeg"/>
+		</Target>
+		<Target Name="Clean">
+			<CallTarget Targets="VCLTestApp:Clean;ConsolePasOpenJpeg:Clean"/>
+		</Target>
+		<Target Name="Make">
+			<CallTarget Targets="VCLTestApp:Make;ConsolePasOpenJpeg:Make"/>
+		</Target>
+		<Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+	</Project>
