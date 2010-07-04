@@ -88,6 +88,16 @@ type
   end;
   PJpeg2000ComponentInfo = ^TJpeg2000ComponentInfo;
 
+  TJpeg2000ImageInfo = record
+    Width: Integer;
+    Height: Integer;
+    ColorSpace: TJpeg2000ColorSpace;
+    ComponentCount: Integer;
+    HasOpacity: Boolean;
+    XOffset: Integer;
+    YOffset: Integer;
+  end;
+
 type
 
   TJpeg2000Options = class(TPersistent)
@@ -95,6 +105,7 @@ type
     FLosslessCompression: Boolean;
     FLossyQuality: TJpeg2000QualityRange;
     FSaveWithMCT: Boolean;
+    FSaveCodestreamOnly: Boolean;
   public
     constructor Create;
     procedure Assign(Source: TPersistent); override;
@@ -114,13 +125,12 @@ type
   TJpeg2000ImageIO = class
   private
     function GetEmpty: Boolean;
-    function GetIntProp(const Index: Integer): Integer;
     function GetComponent(Index: Integer): TJpeg2000ComponentInfo;
+    function GetBitsPerPixel: Integer;
   protected
     FOptions: TJpeg2000Options;
-    FImage: POpjImage;
-    FColorSpace: TJpeg2000ColorSpace;
-    FHasOpacity: Boolean;
+    FOpjImage: POpjImage;
+    FImageInfo: TJpeg2000ImageInfo;
     FComponents: array of TJpeg2000ComponentInfo;
   public
     constructor Create;
@@ -128,40 +138,44 @@ type
 
     //procedure CopyPixels();
 
-    procedure NewImage(AWidth, AHeight: Integer; AColorSpace: TJpeg2000ColorSpace;
-      AHasOpacity: Boolean; AComponentCount: Integer = 0; AXOffset: Integer = 0; AYOffset: Integer = 0);
-
-//    procedure SetComponentData(AIndex: Integer; ABitsPerComponent: Integer;
-//      Samples: PByte; Stride: Integer; SubX: Integer = 0; SubY: Integer = 0);
-
+    procedure ReadFromFile(const FileName: string);
+    procedure ReadFromStream(Stream: TStream);
     procedure GetComponentData(AIndex: Integer; Samples: PByte; ScanlineIndex,
       Stride, DestBpp: Integer; UpsampleIfNeeded: Boolean = True);
 
-    function GetComponentTypeIndex(AType: TJpeg2000ComponentType): Integer;
 
-    procedure GetDataUInt8(AIndex: Integer; Samples: PByte; ScanlineIndex, Stride: Integer);
+    procedure BeginNewImage(AWidth, AHeight: Integer; AColorSpace: TJpeg2000ColorSpace;
+      AHasOpacity: Boolean; AComponentCount: Integer = 0; AXOffset: Integer = 0; AYOffset: Integer = 0);
+    procedure DefineComponent(AIndex: Integer; AWidth, AHeight,APrecision: Integer;
+      CompType: TJpeg2000ComponentType; SubsampX: Integer = 1; SubsampY: Integer = 1);
+    procedure BuildNewImage;
+    procedure SetComponentData(AIndex: Integer; Samples: PByte; ScanlineIndex, Stride: Integer);
+    procedure WriteToFile(const FileName: string);
+    procedure WriteToStream(Stream: TStream);
+
+
+    function GetComponentTypeIndex(AType: TJpeg2000ComponentType): Integer;
+    procedure ClearImage;
 
     //procedure CopyToARGB32Image();
 
 
-    procedure ReadFromFile(const FileName: string);
-    procedure ReadFromStream(Stream: TStream);
+
 //    procedure ReadFromMemory();
 
-    procedure WriteToFile(const FileName: string);
-    procedure WriteToStream(Stream: TStream);
+
 
     property Empty: Boolean read GetEmpty;
-    property Width: Integer index 1 read GetIntProp;
-    property Height: Integer index 2 read GetIntProp;
-    property XOffset: Integer index 3 read GetIntProp;
-    property YOffset: Integer index 4 read GetIntProp;
-    property ColorSpace: TJpeg2000ColorSpace read FColorSpace;
-    property ComponentCount: Integer index 5 read GetIntProp;
+    property Width: Integer read FImageInfo.Width;
+    property Height: Integer read FImageInfo.Height;
+    property XOffset: Integer read FImageInfo.XOffset;
+    property YOffset: Integer read FImageInfo.YOffset;
+    property ColorSpace: TJpeg2000ColorSpace read FImageInfo.ColorSpace;
+    property ComponentCount: Integer read FImageInfo.ComponentCount;
     property Components[Index: Integer]: TJpeg2000ComponentInfo read GetComponent;
-    property BitsPerPixel: Integer index 6 read GetIntProp;
-    property HasOpacity: Boolean read FHasOpacity;
-    property RawImage: POpjImage read FImage;
+    property BitsPerPixel: Integer read GetBitsPerPixel;
+    property HasOpacity: Boolean read FImageInfo.HasOpacity;
+    property RawImage: POpjImage read FOpjImage;
     property Options: TJpeg2000Options read FOptions;
   end;
 
@@ -186,7 +200,6 @@ const
 
   Jpeg2000DefaultLosslessCompression = False;
   Jpeg2000DefaultLossyQuality = 80;
-  Jpeg2000DefaultSaveWithMCT = True;
 
 function ClampToByte(Value: Integer): Integer;
 begin
@@ -216,13 +229,34 @@ begin
   Result := Number * Numerator div Denominator;
 end;
 
+function Jpeg2000CompTypeToOpjCompType(CompType: TJpeg2000ComponentType): TOpjComponentType;
+begin
+  case CompType of
+    cpOpacity:    Result := COMPTYPE_OPACITY;
+    cpLuminance:  Result := COMPTYPE_Y;
+    cpIndex: ;
+    cpBlue:       Result := COMPTYPE_B;
+    cpGreen:      Result := COMPTYPE_G;
+    cpRed:        Result := COMPTYPE_R;
+    cpChromaRed:  Result := COMPTYPE_CR;
+    cpChromaBlue: Result := COMPTYPE_CB;
+    // TODO: change when CMYK support added
+//    cpCyan: ;
+//    cpMagenta: ;
+//    cpYellow: ;
+//    cpBlack: ;
+  else
+    Result := COMPTYPE_UNKNOWN;
+  end;
+end;
+
 { TJpeg2000Options }
 
 constructor TJpeg2000Options.Create;
 begin
   FLosslessCompression := Jpeg2000DefaultLosslessCompression;
   FLossyQuality := Jpeg2000DefaultLossyQuality;
-  FSaveWithMCT := Jpeg2000DefaultSaveWithMCT;
+  FSaveWithMCT := True;
 end;
 
 procedure TJpeg2000Options.Assign(Source: TPersistent);
@@ -255,26 +289,16 @@ end;
 
 function TJpeg2000ImageIO.GetEmpty: Boolean;
 begin
-  Result := FImage = nil;
+  Result := FOpjImage = nil;
 end;
 
-function TJpeg2000ImageIO.GetIntProp(const Index: Integer): Integer;
+function TJpeg2000ImageIO.GetBitsPerPixel: Integer;
 var
   I: Integer;
 begin
-  Assert(Index in [1..6]);
-
   Result := 0;
-  case Index of
-    1: Result := FImage.x1;
-    2: Result := FImage.y1;
-    3: Result := FImage.x0;
-    4: Result := FImage.y0;
-    5: Result := FImage.numcomps;
-    6:
-      for I := 0 to FImage.numcomps - 1 do
-        Inc(Result, FImage.comps[I].prec);
-  end;
+  for I := 0 to FImageInfo.ComponentCount - 1 do
+    Inc(Result, FComponents[I].Precision);
 end;
 
 function TJpeg2000ImageIO.GetComponent(Index: Integer): TJpeg2000ComponentInfo;
@@ -290,6 +314,7 @@ var
   SrcLine: PInteger;
   Sample: LongWord;
 begin
+  Assert(AIndex in [0..ComponentCount - 1]);
   Assert(DestBpp in [1, 8, 16, 32]);
   Info := FComponents[AIndex];
 
@@ -302,7 +327,7 @@ begin
   if not UpsampleIfNeeded then
     XRepeat := 0;
 
-  SrcLine := @FImage.comps[AIndex].data[ScanlineIndex * Info.Width];
+  SrcLine := @FOpjImage.comps[AIndex].data[ScanlineIndex * Info.Width];
 
   for X := 0 to Info.Width - 1 do
   begin
@@ -348,65 +373,113 @@ begin
   Result := -1;
 end;
 
-procedure TJpeg2000ImageIO.GetDataUInt8(AIndex: Integer; Samples: PByte;
-  ScanlineIndex, Stride: Integer);
-var
-  X: Integer;
-begin
-  for X := 0 to FComponents[AIndex].Width - 1 do
-  begin
-
-
-    Inc(Samples, Stride);
-  end;
-end;
-
-procedure TJpeg2000ImageIO.NewImage(AWidth, AHeight: Integer;
+procedure TJpeg2000ImageIO.BeginNewImage(AWidth, AHeight: Integer;
   AColorSpace: TJpeg2000ColorSpace; AHasOpacity: Boolean;
   AComponentCount, AXOffset, AYOffset: Integer);
-var
-  Params: array of TOpjImageCompParam;
-  OpjColorSpace: TOpjColorSpace;
 
   function DetermineDefaultComponentCount: Integer;
   begin
     Result := 0;
     case AColorSpace of
-      csLuminance: ;
-      csIndexed: ;
-      csRGB: ;
-      csYCbCr: ;
-      csCMYK: ;
+      csLuminance, csIndexed: Result := 1;
+      csRGB, csYCbCr:         Result := 3;
+      csCMYK:                 Result := 4;
     end;
+    if AHasOpacity then
+      Inc(Result);
   end;
 
 begin
   Assert((AColorSpace <> csUnknown) and (AWidth > 0) and (AHeight > 0));
+  ClearImage;
 
-  opj_image_destroy(FImage);
-  FImage := nil;
+  FImageInfo.Width := AWidth;
+  FImageInfo.Height := AHeight;
+  FImageInfo.XOffset := AXOffset;
+  FImageInfo.YOffset := AYOffset;
+  FImageInfo.ColorSpace := AColorSpace;
+  FImageInfo.HasOpacity := AHasOpacity;
 
-  if AComponentCount = 0 then
-    AComponentCount := DetermineDefaultComponentCount
-  else if AComponentCount > MaxComponentCount then
-    AComponentCount := MaxComponentCount;
+  FImageInfo.ComponentCount := AComponentCount;
+  if FImageInfo.ComponentCount = 0 then
+    FImageInfo.ComponentCount := DetermineDefaultComponentCount
+  else if FImageInfo.ComponentCount > MaxComponentCount then
+    FImageInfo.ComponentCount := MaxComponentCount;
 
+  SetLength(FComponents, FImageInfo.ComponentCount);
+end;
+
+procedure TJpeg2000ImageIO.DefineComponent(AIndex, AWidth, AHeight,
+  APrecision: Integer; CompType: TJpeg2000ComponentType; SubsampX,
+  SubsampY: Integer);
+var
+  Info: PJpeg2000ComponentInfo;
+begin
+  Assert(AIndex in [0..ComponentCount - 1]);
+  Info := @FComponents[AIndex];
+
+  Info.Width := AWidth;
+  Info.Height := AHeight;
+  Info.CompType := CompType;
+  Info.Precision := APrecision;
+  Info.SubsampX := SubsampX;
+  Info.SubsampY := SubsampY;
+  Info.Signed := False;
+  Info.XOffset := 0;
+  Info.YOffset := 0;
+end;
+
+procedure TJpeg2000ImageIO.SetComponentData(AIndex: Integer;
+  Samples: PByte; ScanlineIndex, Stride: Integer);
+begin
+  Assert(AIndex in [0..ComponentCount - 1]);
+
+end;
+
+procedure TJpeg2000ImageIO.BuildNewImage;
+var
+  Params: array of TOpjImageCompParam;
+  OpjColorSpace: TOpjColorSpace;
+  I: Integer;
+  Info: TJpeg2000ComponentInfo;
+begin
   OpjColorSpace := CLRSPC_UNKNOWN;
-  case AColorSpace of
+  case FImageInfo.ColorSpace of
     csLuminance: OpjColorSpace := CLRSPC_GRAY;
     csIndexed:   OpjColorSpace := CLRSPC_SRGB;
     csRGB:       OpjColorSpace := CLRSPC_SRGB;
     csYCbCr:     OpjColorSpace := CLRSPC_SYCC;
-//    csCMYK:      OpjColorSpace := CLRSPC_SRGB;
+    csCMYK:      OpjColorSpace := CLRSPC_SRGB; // TODO: change when CMYK support added
   end;
 
-  SetLength(Params, AComponentCount);
+  SetLength(Params, FImageInfo.ComponentCount);
 
+  for I := 0 to FImageInfo.ComponentCount - 1 do
+  begin
+    Info := FComponents[I];
+    Params[I].w := Info.Width;
+    Params[I].h := Info.Height;
+    Params[I].dx := Info.SubsampX;
+    Params[I].dy := Info.SubsampY;
+    Params[I].x0 := Info.XOffset;
+    Params[I].y0 := Info.YOffset;
+    Params[I].prec := Info.Precision;
+    Params[I].bpp := Info.Precision;
+    Params[I].sgnd := Ord(Info.Signed);
+    Params[I].comp_type := Jpeg2000CompTypeToOpjCompType(Info.CompType);
+  end;
 
-  FImage := opj_image_create(AComponentCount, @Params[0], OpjColorSpace);
-//  FImage.x0
+  // Check validity of settings (like component outside image etc., Cr in CMYK etc)
 
+  FOpjImage := opj_image_create(FImageInfo.ComponentCount, @Params[0], OpjColorSpace);
 
+  if FOpjImage = nil then
+    raise EJpeg2000ImageIOError.Create('aaa');
+
+  FOpjImage.x0 := FImageInfo.XOffset;
+  FOpjImage.y0 := FImageInfo.YOffset;
+  FOpjImage.x1 := FImageInfo.XOffset + FImageInfo.Width;
+  FOpjImage.y1 := FImageInfo.YOffset + FImageInfo.Height;
 end;
 
 procedure TJpeg2000ImageIO.ReadFromFile(const FileName: string);
@@ -453,21 +526,28 @@ var
     Info: PJpeg2000ComponentInfo;
     SrcComp: POpjImageComp;
   begin
-    FHasOpacity := False;
-    SetLength(FComponents, ComponentCount);
+    FImageInfo.Width := FOpjImage.x1 - FOpjImage.x0;
+    FImageInfo.Height := FOpjImage.y1 - FOpjImage.y0;
+    FImageInfo.ComponentCount := FOpjImage.numcomps;
+    FImageInfo.XOffset := FOpjImage.x0;
+    FImageInfo.YOffset := FOpjImage.y0;
+    FImageInfo.HasOpacity := False;
 
-    case FImage.color_space of
-      CLRSPC_GRAY: FColorSpace := csLuminance;
-      CLRSPC_SRGB: FColorSpace := csRGB;
-      CLRSPC_SYCC: FColorSpace := csYCbCr;
+    case FOpjImage.color_space of
+      CLRSPC_GRAY: FImageInfo.ColorSpace := csLuminance;
+      CLRSPC_SRGB: FImageInfo.ColorSpace := csRGB;
+      CLRSPC_SYCC: FImageInfo.ColorSpace := csYCbCr;
+      // TODO: change when CMYK support added
     else
-      FColorSpace := csUnknown;
+      FImageInfo.ColorSpace := csUnknown;
     end;
 
-    for I := 0 to ComponentCount - 1 do
+    SetLength(FComponents, FImageInfo.ComponentCount);
+
+    for I := 0 to FImageInfo.ComponentCount - 1 do
     begin
       Info := @FComponents[I];
-      SrcComp := @FImage.comps[I];
+      SrcComp := @FOpjImage.comps[I];
 
       // Basic props
       Info.Width := SrcComp.w;
@@ -492,7 +572,7 @@ var
         COMPTYPE_UNKNOWN:
           begin
             // Missing CDEF box in JP2 file, we just guess component associations
-            case FColorSpace of
+            case FImageInfo.ColorSpace of
               csLuminance:
                 Info.CompType := cpLuminance;
               csRGB:
@@ -510,7 +590,7 @@ var
                   2: Info.CompType := cpChromaRed;
                 end;
             end;
-            if (ComponentCount in [2, 4]) and (I = ComponentCount - 1) then
+            if (ComponentCount in [2, 4]) and (I = ComponentCount - 1) and (FImageInfo.ColorSpace <> csUnknown) then
               Info.CompType := cpOpacity;
           end;
         COMPTYPE_R:       Info.CompType := cpRed;
@@ -523,11 +603,12 @@ var
       end;
 
       if Info.CompType = cpOpacity then
-        FHasOpacity := True;
+        FImageInfo.HasOpacity := True;
     end;
   end;
 
 begin
+  ClearImage;
   opj_set_default_decoder_parameters(@Parameters);
 
   // Determine which codec to use
@@ -553,8 +634,8 @@ begin
 
   try
     // Decode image
-    FImage := opj_decode(Info, IO);
-    if FImage = nil then
+    FOpjImage := opj_decode(Info, IO);
+    if FOpjImage = nil then
       raise EJpeg2000ImageIOError.Create('JPEG 2000 image decoding failed');
   finally
     // Set the input position just after end of image
@@ -581,8 +662,71 @@ begin
 end;
 
 procedure TJpeg2000ImageIO.WriteToStream(Stream: TStream);
-begin
+var
+  IO: POpjCio;
+  Info: POpjCInfo;
+  Parameters: TOpjCParameters;
 
+  procedure SetCompParams;
+  var
+    Rate, TargetSize: Single;
+    NumDataItems: Integer;
+  begin
+    Parameters.cod_format := 1;
+    Parameters.numresolution := 6;
+    Parameters.tcp_numlayers := 1;
+    Parameters.cp_disto_alloc := 1;
+    // Use MCT (multi-color component transform) RGB->YCbCr, OpenJpeg uses it only for 3 channel images though
+    Parameters.tcp_mct := Ord(Options.SaveWithMCT);
+
+    if Options.LosslessCompression then
+    begin
+      // Set rate to 0 -> lossless
+      Parameters.tcp_rates[0] := 0;
+    end
+    else
+    begin
+      // Use irreversible DWT
+      Parameters.irreversible := 1;
+      // Quality -> Rate computation taken from ImageMagick
+      Rate := 100.0 / Sqr(115 - Options.LossyQuality);
+      NumDataItems := Width * Height * ComponentCount;
+      TargetSize := (NumDataItems * Rate) + 550 + (ComponentCount - 1) * 142;
+      Parameters.tcp_rates[0] := 1.0 / (TargetSize / NumDataItems);
+    end;
+  end;
+
+begin
+  // Create JP2 compressor (save JP2 boxes + code stream)
+  Info := opj_create_compress(CODEC_JP2);
+  // Set event manager to nil to avoid getting messages
+  Info.event_mgr := nil;
+  // Set various sompression params and then setup encoder
+  opj_set_default_encoder_parameters(@Parameters);
+  SetCompParams;
+  opj_setup_encoder(Info, @Parameters, FOpjImage);
+  // Open OpenJPEG output
+  IO := opj_cio_open(opj_common_ptr(Info), nil, 0);
+
+  try
+    // Try to encode the image
+    if not opj_encode(Info, IO, FOpjImage, nil) then
+      raise EJpeg2000ImageIOError.Create('JPEG 2000 image encoding failed');;
+    // Finally write buffer with encoded image to output
+    Stream.WriteBuffer(IO.buffer^, cio_tell(IO));
+  finally
+    opj_destroy_compress(Info);
+    opj_cio_close(IO);
+  end;
+end;
+
+procedure TJpeg2000ImageIO.ClearImage;
+begin
+  opj_image_destroy(FOpjImage);
+  FOpjImage := nil;
+
+  SetLength(FComponents, 0);
+  FillChar(FImageInfo, SizeOf(FImageInfo), 0);
 end;
 
 end.

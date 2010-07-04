@@ -159,6 +159,25 @@ var
     end;
   end;
 
+  procedure SwapRedAndBlue;
+  var
+    X, Y: Integer;
+    Ptr: PByteArray;
+    Tmp: Byte;
+  begin
+    for Y := 0 to Height - 1 do
+    begin
+      Ptr := ScanLine[Y];
+      for X := 0 to Width - 1 do
+      begin
+        Tmp := Ptr[2];
+        Ptr[2] := Ptr[0];
+        Ptr[0] := Tmp;
+        Ptr := @Ptr[BytesPerPixel];
+      end;
+    end;
+  end;
+
 begin
   IO := TJpeg2000ImageIO.Create;
   try
@@ -177,7 +196,7 @@ begin
     if PixelFormat = pf8Bit then
       SetupPalette;
 
-    // Now read sanlines from decoded JPEG 2000 image base on pixel format
+    // Now read scanlines from decoded JPEG 2000 image base on pixel format
     // and color space
     for Y := 0 to Height - 1 do
     begin
@@ -216,6 +235,7 @@ begin
     case IO.ColorSpace of
       csYCbCr:   ConvertFromYCC;
       csCMYK:    ConvertFromCMYK;
+      csUnknown: SwapRedAndBlue; // Just for convenience (raw code streams, ICC profiles, etc.)
     end;
 
   {$IF CompilerVersion >= 20.0}
@@ -232,16 +252,84 @@ end;
 procedure TJpeg2000Bitmap.SaveToStream(Stream: TStream);
 var
   IO: TJpeg2000ImageIO;
-begin
-  inherited;
- { IO := TJpeg2000ImageIO.Create;
-  try
+  WorkBmp: TBitmap;
+  ComponentCount, Y: Integer;
+  ColorSpace: TJpeg2000ColorSpace;
 
+  procedure DefineComponents(const Types: array of TJpeg2000ComponentType);
+  var
+    I: Integer;
+  begin
+    for I := 0 to Length(Types) - 1 do
+      IO.DefineComponent(I, WorkBmp.Width, WorkBmp.Height, 8, Types[I], 1, 1);
+  end;
+
+  procedure WriteComponents(const Types: array of TJpeg2000ComponentType; ScanIdx, Stride: Integer);
+  var
+    CompIdx, I: Integer;
+  begin
+    for I := 0 to Length(Types) - 1 do
+    begin
+      CompIdx := I;
+      if Types[I] <> cpUnknown then
+        CompIdx := IO.GetComponentTypeIndex(Types[I]);
+      if CompIdx >= IO.ComponentCount then
+        CompIdx := IO.ComponentCount - 1;
+
+      if CompIdx < 0 then
+        raise EJpeg2000BitmapError.Create(SComponentNotFound);
+
+
+      IO.SetComponentData(CompIdx, @PByteArray(ScanLine[ScanIdx])[I], Y, Stride);
+    end;
+  end;
+
+begin
+  IO := TJpeg2000ImageIO.Create;
+  try
+    // Saving only supports 8/24/32bit bitmaps. For incompatible pixel formats
+    // temp working bitmap is created.
+    if not (PixelFormat in [pf8bit, pf24bit, pf32bit]) then
+    begin
+      WorkBmp := TBitmap.Create;
+      WorkBmp.Assign(Self);
+      WorkBmp.PixelFormat := pf24bit;
+    end
+    else
+      WorkBmp := Self;
+
+    ColorSpace := csRGB;
+    ComponentCount := 3;
+    case WorkBmp.PixelFormat of
+      pf8bit:  ComponentCount := 1;
+      pf32bit: ComponentCount := 4;
+    end;
+
+    IO.BeginNewImage(WorkBmp.Width, WorkBmp.Height, ColorSpace, ComponentCount = 4);
+    case WorkBmp.PixelFormat of
+      pf8bit:  DefineComponents([cpLuminance]);
+      pf24bit: DefineComponents([cpBlue, cpGreen, cpRed]);
+      pf32bit: DefineComponents([cpBlue, cpGreen, cpRed, cpOpacity]);
+    end;
+    IO.BuildNewImage;
+
+    for Y := 0 to Height - 1 do
+    begin
+      case WorkBmp.PixelFormat of
+        pf8bit:  WriteComponents([cpLuminance], Y, 1);
+        pf24bit: WriteComponents([cpBlue, cpGreen, cpRed], Y, 3);
+        pf32bit: WriteComponents([cpBlue, cpGreen, cpRed, cpOpacity], Y, 4);
+      end;
+    end;
+
+    // Assign JPEG2000 IO options and write to stream
     IO.Options.Assign(Options);
     IO.WriteToStream(Stream);
   finally
     IO.Free;
-  end;}
+    if WorkBmp <> Self then
+      WorkBmp.Free;
+  end;
 end;
 
 initialization

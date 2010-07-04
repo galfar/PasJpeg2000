@@ -150,6 +150,7 @@ type
     COMPTYPE_CR = 6,      { Cr component of YUV image }
     COMPTYPE_OPACITY = 7  { opacity/alpha channel }
   );
+  TOpjComponentType = OPJ_COMPONENT_TYPE;
 
   { Supported codec }
   OPJ_CODEC_FORMAT = (
@@ -259,6 +260,7 @@ type
   end;
   opj_cparameters_t = opj_cparameters;
   popj_cparameters_t = ^opj_cparameters_t;
+  TOpjCParameters = opj_cparameters_t;
 
   { Decompression parameters }
   opj_dparameters = record
@@ -304,6 +306,8 @@ type
   end;
   opj_cinfo_t = opj_cinfo;
   popj_cinfo_t = ^opj_cinfo_t;
+  TOpjCInfo = opj_cinfo_t;
+  POpjCInfo = popj_cinfo_t;
 
   { Decompression context info }
   opj_dinfo = record
