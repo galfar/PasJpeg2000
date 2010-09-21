@@ -279,7 +279,6 @@ var
       if CompIdx < 0 then
         raise EJpeg2000BitmapError.Create(SComponentNotFound);
 
-
       IO.SetComponentData(CompIdx, @PByteArray(ScanLine[ScanIdx])[I], Y, Stride);
     end;
   end;

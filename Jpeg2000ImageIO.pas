@@ -1,5 +1,5 @@
 {
-  $Id: Jpeg2000Handlers.pas 16 2010-04-05 21:36:19Z galfar $
+  $Id$
   PasJpeg2000 by Marek Mauder
   http://code.google.com/p/pasjpeg2000
   http://galfar.vevb.net/pasjpeg2000
@@ -233,18 +233,17 @@ function Jpeg2000CompTypeToOpjCompType(CompType: TJpeg2000ComponentType): TOpjCo
 begin
   case CompType of
     cpOpacity:    Result := COMPTYPE_OPACITY;
-    cpLuminance:  Result := COMPTYPE_Y;
+    cpLuminance:  Result := COMPTYPE_L;
     cpIndex: ;
     cpBlue:       Result := COMPTYPE_B;
     cpGreen:      Result := COMPTYPE_G;
     cpRed:        Result := COMPTYPE_R;
     cpChromaRed:  Result := COMPTYPE_CR;
     cpChromaBlue: Result := COMPTYPE_CB;
-    // TODO: change when CMYK support added
-//    cpCyan: ;
-//    cpMagenta: ;
-//    cpYellow: ;
-//    cpBlack: ;
+    cpCyan:       Result := COMPTYPE_C;
+    cpMagenta:    Result := COMPTYPE_M;
+    cpYellow:     Result := COMPTYPE_Y;
+    cpBlack:      Result := COMPTYPE_K;
   else
     Result := COMPTYPE_UNKNOWN;
   end;
@@ -449,7 +448,7 @@ begin
     csIndexed:   OpjColorSpace := CLRSPC_SRGB;
     csRGB:       OpjColorSpace := CLRSPC_SRGB;
     csYCbCr:     OpjColorSpace := CLRSPC_SYCC;
-    csCMYK:      OpjColorSpace := CLRSPC_SRGB; // TODO: change when CMYK support added
+    csCMYK:      OpjColorSpace := CLRSPC_CMYK;
   end;
 
   SetLength(Params, FImageInfo.ComponentCount);
@@ -537,10 +536,14 @@ var
       CLRSPC_GRAY: FImageInfo.ColorSpace := csLuminance;
       CLRSPC_SRGB: FImageInfo.ColorSpace := csRGB;
       CLRSPC_SYCC: FImageInfo.ColorSpace := csYCbCr;
-      // TODO: change when CMYK support added
+      CLRSPC_CMYK: FImageInfo.ColorSpace := csCMYK;
     else
       FImageInfo.ColorSpace := csUnknown;
     end;
+
+    // Mark image as indexed if there is a palette with entries for all channels
+    if (FOpjImage.palette <> nil) and (FOpjImage.numcomps = FOpjImage.palette.numchans) then
+      FImageInfo.ColorSpace := csIndexed;
 
     SetLength(FComponents, FImageInfo.ComponentCount);
 
@@ -564,7 +567,7 @@ var
       if Info.Signed then
         Info.UnsignedShift := 1 shl (Info.Precision - 1);
       // Scaling value used when converting samples from
-      // more exotic bpp reprsentations
+      // more exotic bpp representations
       Info.UnsignedMaxValue := 1 shl Info.Precision - 1;
 
       // Component type
@@ -589,9 +592,20 @@ var
                   1: Info.CompType := cpChromaBlue;
                   2: Info.CompType := cpChromaRed;
                 end;
+              csCMYK:
+                // Usually [msb]KYMC[lsb] order
+                case I of
+                  0: Info.CompType := cpCyan;
+                  1: Info.CompType := cpMagenta;
+                  2: Info.CompType := cpYellow;
+                  3: Info.CompType := cpBlack;
+                end;
             end;
-            if (ComponentCount in [2, 4]) and (I = ComponentCount - 1) and (FImageInfo.ColorSpace <> csUnknown) then
+            if (ComponentCount in [2, 4]) and (I = ComponentCount - 1) and
+              (FImageInfo.ColorSpace in [csRGB, csYCbCr, csLuminance]) then
+            begin
               Info.CompType := cpOpacity;
+            end;
           end;
         COMPTYPE_R:       Info.CompType := cpRed;
         COMPTYPE_G:       Info.CompType := cpGreen;
@@ -599,7 +613,11 @@ var
         COMPTYPE_CB:      Info.CompType := cpChromaBlue;
         COMPTYPE_CR:      Info.CompType := cpChromaRed;
         COMPTYPE_OPACITY: Info.CompType := cpOpacity;
-        COMPTYPE_Y:       Info.CompType := cpLuminance; // Y is intensity part of YCC or independent gray channel
+        COMPTYPE_L:       Info.CompType := cpLuminance; // Y is intensity part of YCC or independent gray channel
+        COMPTYPE_C:       Info.CompType := cpCyan;
+        COMPTYPE_M:       Info.CompType := cpMagenta;
+        COMPTYPE_Y:       Info.CompType := cpYellow;
+        COMPTYPE_K:       Info.CompType := cpBlack;
       end;
 
       if Info.CompType = cpOpacity then
